@@ -24,6 +24,7 @@ cond_thresh = 1e-10;       % conditioning guard for WLS
 lambda_ridge = 1e-6;   
 
 
+% ===== Global Uncertainty Contributions (0–500 PF, 0–200 F+W, 0–100% fossil) =====
 
 % ---- 1. Source names ----
 src_names = { ...
@@ -44,8 +45,8 @@ Wsqrt = diag(sqrt(w));
 
 % ---- 3. Grids: PF 0–500 ppb, F+W 0–200 ppb, fossil fraction 0–1 ----
 pf_max   = 500;   pf_step   = 10;
-FW_min   = 0;     FW_max    = 200;   FW_step = 20;
-fF_min   = 0;     fF_max    = 1.0;   fF_step = 0.2;  % 0,0.2,...,1
+FW_min   = 0;     FW_max    = 100;   FW_step = 10;
+fF_min   = 0;     fF_max    = 1.0;   fF_step = 0.1;  % 0,0.2,...,1
 
 pf_vec   = (0:pf_step:pf_max)';      % permafrost CH4 (ppb)
 FW_vec   = (FW_min:FW_step:FW_max)'; % total F+W CH4 (ppb)
@@ -95,16 +96,9 @@ contrib_ppb(10) = run_mean_half_ppb_global(ZERO14, [0 0 U_d13(3)], 0, ZEROmeas);
 % Ethane ratio
 contrib_ppb(11) = run_mean_half_ppb_global(ZERO14, ZERO13, U_eth, ZEROmeas);       % ethane ratio
 
-% ==== Leave-one-out RMS test over PF–(F+W)–fossil-fraction space ====
-% Assumes the following are already defined in your script:
-%   bg_CH4, d14bg, d13bg, dDbg, ethanebg   (background)
-%   d14ff, d14apm, d14wet
-%   d13ff, d13apm, d13wt
-%   dDff,  dDapm,  dDwt
-%   ethaneff
-%
+
 % and measurement noise:
-noise_ch4    = 5;
+noise_ch4    = 1.7;
 noise_d14C   = 5;
 noise_d13C   = 0.2;
 noise_dD     = 1.7;
@@ -291,45 +285,39 @@ grp  = [repmat("All tracers", numel(abs_all),    1); ...
 figure('Color','w');
 tiledlayout(1,2,'TileSpacing','tight','Padding','tight')
 
-%===================== TILE 1: stacked % contributions (numeric axis, flipped legend) =====================
+%===================== TILE 1: stacked % contributions (sorted by magnitude) =====================
 ax = nexttile;
 hold(ax,'on');
 
 % --- Convert ppb contributions -> percentage of SUM(individual contributions) ---
-tot_ppb     = sum(contrib_ppb, 'omitnan');   % scalar
-contrib_pct = 100 * (contrib_ppb ./ tot_ppb); % [nSources x 1]
+tot_ppb     = sum(contrib_ppb, 'omitnan');        % scalar
+contrib_pct = 100 * (contrib_ppb ./ tot_ppb);     % [nSources x 1]
 
-% --- Put stacked bar at numeric x = 1 (so xlim works) ---
+% --- Sort by magnitude (largest first) ---
+[contrib_pct_sorted, sortIdx] = sort(contrib_pct, 'ascend');
+
+% Reorder names and colours to match sorted contributions
+src_names_sorted  = src_names(sortIdx);
+bar_colors_sorted = bar_colors(sortIdx,:);
+
+% --- Draw stacked bar at x = 1 ---
 xpos = 1;
-b = bar(ax, xpos, contrib_pct', 'stacked', 'BarWidth', 0.65);
+b = bar(ax, xpos, contrib_pct_sorted', 'stacked', 'BarWidth', 0.65);
 
 ylabel(ax,'Contribution to total uncertainty (%)');
 title(ax,'Uncertainty Sensitivity Test');
-set(ax,'FontSize',26);   % bigger axis ticks (even though we hide XTicks)
+set(ax,'FontSize',26);
 
-% --- Colours (unchanged) ---
-clr_noise = [0.55 0.70 1.00; 0.35 0.55 0.90; 0.15 0.35 0.75; 0.00 0.20 0.55];
-clr_d14   = [0.40 0.80 0.40; 0.25 0.60 0.25; 0.10 0.40 0.10];
-clr_d13   = [1.00 0.70 0.40; 0.95 0.55 0.10; 0.80 0.35 0.00];
-clr_eth   = [0.70 0.50 0.80];
-bar_colors = [clr_noise; clr_d14; clr_d13; clr_eth];
-
+% --- Apply reordered colours ---
 for i = 1:numel(b)
-    set(b(i),'FaceColor',bar_colors(i,:),'EdgeColor','none');
+    set(b(i), 'FaceColor', bar_colors_sorted(i,:), 'EdgeColor', 'none');
 end
 
-src_names = { ...
-  'Meas Unc CH_4','Meas Unc \Delta^{14}C','Meas Unc \delta^{13}C','Meas Unc ethane', ...
-  '\Delta^{14}C_{ff}','\Delta^{14}C_{pm}','\Delta^{14}C_{wt}', ...
-  '\delta^{13}C_{ff}','\delta^{13}C_{pm}','\delta^{13}C_{wt}', ...
-  'C_2H_6:CH_4_{ff}'};
-
-% --- Flip legend order to match visual top-to-bottom of the stack ---
-src_names_flip = flip(src_names);
-b_flip         = flip(b);
-
-lg1 = legend(ax, b_flip, src_names_flip, 'Location','northeast');
-set(lg1,'FontSize',22);     % bigger legend text
+% --- Legend order to match visual stack top-to-bottom ---
+% In a stacked MATLAB bar, the last series is visually on top,
+% so flip handles + labels for the legend.
+lg1 = legend(ax, flip(b), flip(src_names_sorted), 'Location','northeast');
+set(lg1,'FontSize',22);
 lg1.Box = 'on';
 
 grid(ax,'on');
@@ -410,6 +398,21 @@ set(lg2,'FontSize',22);
 lg2.Box = 'on';
 
 hold(ax2,'off');
+%% CHECK BIAS   
+% ----- Mean bias diagnostics (ppb) -----
+BIAS_all    = mean(err_all,    'omitnan');
+BIAS_no_d14 = mean(err_no_d14, 'omitnan');
+BIAS_no_d13 = mean(err_no_d13, 'omitnan');
+BIAS_no_dD  = mean(err_no_dD,  'omitnan');
+BIAS_no_eth = mean(err_no_eth, 'omitnan');
+
+fprintf('Mean bias in PF estimate (ppb) over PF=0–500, F+W=0–200, fF=0–1 (with noise):\n');
+fprintf('  All tracers      : %+6.2f ppb\n', BIAS_all);
+fprintf('  No Δ14C          : %+6.2f ppb\n', BIAS_no_d14);
+fprintf('  No δ13C          : %+6.2f ppb\n', BIAS_no_d13);
+fprintf('  No δD            : %+6.2f ppb\n', BIAS_no_dD);
+fprintf('  No ethane        : %+6.2f ppb\n\n', BIAS_no_eth);
+
 
 
 %% plotting in ppb
